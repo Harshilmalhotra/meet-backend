@@ -71,6 +71,55 @@ Transcript: "${text}"
   }
 }
 
+async function createJiraTicket(taskInfo) {
+  try {
+    const { assignee, task, due } = taskInfo;
+
+    const issueData = {
+      fields: {
+        project: { key: process.env.JIRA_PROJECT_KEY },
+        summary: `📋 ${task}`,
+        description: {
+          type: "doc",
+          version: 1,
+          content: [
+            {
+              type: "paragraph",
+              content: [
+                {
+                  type: "text",
+                  text: `Assigned to: ${assignee}\nDue: ${due}`
+                }
+              ]
+            }
+          ]
+        },
+        issuetype: { name: "Task" },
+      }
+    };
+
+    const response = await axios.post(
+      `${process.env.JIRA_DOMAIN}/rest/api/3/issue`,
+      issueData,
+      {
+        auth: {
+          username: process.env.JIRA_EMAIL,
+          password: process.env.JIRA_API_TOKEN
+        },
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json"
+        }
+      }
+    );
+
+    console.log("✅ Jira ticket created:", response.data.key);
+  } catch (error) {
+    console.error("❌ Jira error:", error.response?.data || error.message);
+  }
+}
+
+
 app.post("/transcripts", async (req, res) => {
   const payload = req.body;
   const speaker = payload?.speaker || "Unknown";
@@ -96,17 +145,16 @@ app.post("/transcripts", async (req, res) => {
   if (taskInfo) {
     console.log("📋 Detected Task:", taskInfo);
 
-    const taskMessage = JSON.stringify({
-      type: "task",
-      data: taskInfo
-    });
-
-    // ✅ Broadcast task detection
+    // Broadcast task
+    const taskMessage = JSON.stringify({ type: "task", data: taskInfo });
     connectedClients.forEach(client => {
       if (client.readyState === WebSocket.OPEN) {
         client.send(taskMessage);
       }
     });
+
+    // Create Jira Ticket
+    await createJiraTicket(taskInfo);
   }
 
   res.status(200).json({ status: "received" });
