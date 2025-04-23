@@ -30,59 +30,58 @@ wss.on("connection", (ws) => {
 
 // Initialize Gemini
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash"
+});
+
 
 async function analyzeTranscript(text) {
   const prompt = `
-  You are an assistant that listens to meeting transcripts. If a message contains a task assignment, extract:
-  - assignee name
-  - task description
-  - deadline (in natural language)
+You are an assistant that extracts task assignments from meeting transcripts.
 
-  Format response as JSON:
-  {
-    "assignee": "...",
-    "task": "...",
-    "due": "..."
-  }
+If a message contains a task assignment, extract:
+- assignee name (only if explicitly mentioned)
+- task description
+- deadline or due date (if mentioned)
 
-  If no task, just respond: null
+If no deadline or assignee is mentioned, use "unspecified".
 
-  Transcript: "${text}"
-  `;
+Respond only in **valid JSON** using the following structure:
+
+{
+  "assignee": "Name or 'unspecified'",
+  "task": "Task description",
+  "due": "Due date or 'unspecified'"
+}
+
+If no task is found, respond with: null
+
+Transcript: "${text}"
+`;
 
   try {
     const response = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + process.env.GEMINI_API_KEY,
       {
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
+        contents: [{ parts: [{ text: prompt }] }]
       },
       {
         headers: { "Content-Type": "application/json" },
       }
     );
 
-    const result = response.data;
-    const taskInfo = result?.candidates?.[0]?.content;
+    const rawText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    console.log("📤 Gemini raw response:", rawText);
 
-    if (taskInfo) {
-      return {
-        assignee: taskInfo.assignee || "Unknown",
-        task: taskInfo.task || "No task description",
-        due: taskInfo.due || "No deadline",
-      };
-    }
+    if (rawText.trim() === "null") return null;
 
-    return null; // No task found
+    return JSON.parse(rawText);
   } catch (error) {
-    console.error("Error in Gemini API:", error.message);
+    console.error("❌ Error analyzing transcript:", error.message);
     return null;
   }
 }
+
 
 app.post("/transcripts", async (req, res) => {
   const payload = req.body;
