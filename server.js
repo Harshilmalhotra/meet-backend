@@ -4,7 +4,6 @@ const bodyParser = require("body-parser");
 const cors = require("cors");
 const WebSocket = require("ws");
 const axios = require("axios");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
 
 const app = express();
 const PORT = 4000;
@@ -28,84 +27,84 @@ wss.on("connection", (ws) => {
   });
 });
 
-// Initialize Gemini
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash"
-});
-
-
 async function analyzeTranscript(text) {
   const prompt = `
-You are an assistant that extracts task assignments from meeting transcripts.
+From the following meeting transcript, extract any task assignment.
 
-If a message contains a task assignment, extract:
-- assignee name (only if explicitly mentioned)
-- task description
-- deadline or due date (if mentioned)
-
-If no deadline or assignee is mentioned, use "unspecified".
-
-Respond only in **valid JSON** using the following structure:
-
+Return only a valid JSON object with these fields:
 {
   "assignee": "Name or 'unspecified'",
   "task": "Task description",
   "due": "Due date or 'unspecified'"
 }
 
-If no task is found, respond with: null
+If no task exists, respond with: null
 
 Transcript: "${text}"
-`;
+  `.trim();
 
   try {
     const response = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=" + process.env.GEMINI_API_KEY,
+      "https://api.cohere.ai/v1/generate",
       {
-        contents: [{ parts: [{ text: prompt }] }]
+        model: "command-r-plus",
+        prompt: prompt,
+        max_tokens: 100,
+        temperature: 0.2,
       },
       {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          Authorization: `Bearer ${process.env.COHERE_API_KEY}`,
+          "Content-Type": "application/json",
+        },
       }
     );
 
-    const rawText = response?.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    console.log("📤 Gemini raw response:", rawText);
+    const output = response.data.generations[0].text.trim();
+    console.log("🧠 Raw Cohere Response:", output);
 
-    if (rawText.trim() === "null") return null;
-
-    return JSON.parse(rawText);
+    const parsed = JSON.parse(output);
+    return parsed;
   } catch (error) {
-    console.error("❌ Error analyzing transcript:", error.message);
+    console.error("❌ Cohere API error:", error.response?.data || error.message);
     return null;
   }
 }
-
 
 app.post("/transcripts", async (req, res) => {
   const payload = req.body;
   const speaker = payload?.speaker || "Unknown";
   const text = payload?.transcript || payload?.text || "No text";
 
-  const message = JSON.stringify({ speaker, text });
+  const transcriptMessage = JSON.stringify({
+    type: "transcript",
+    data: { speaker, text }
+  });
 
-  // Send live transcription to connected WebSocket clients
+  // ✅ Broadcast live transcript
   connectedClients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      client.send(transcriptMessage);
     }
   });
 
-  // Process transcription with Gemini
+  console.log("📢 Sent transcript:", transcriptMessage);
+
+  // 🧠 Analyze the transcript with Cohere
   const taskInfo = await analyzeTranscript(text);
 
   if (taskInfo) {
     console.log("📋 Detected Task:", taskInfo);
-    // Send task information to WebSocket clients as well
+
+    const taskMessage = JSON.stringify({
+      type: "task",
+      data: taskInfo
+    });
+
+    // ✅ Broadcast task detection
     connectedClients.forEach(client => {
       if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify({ taskInfo }));
+        client.send(taskMessage);
       }
     });
   }
